@@ -60,18 +60,25 @@ type pbes2Params struct {
 	KeyDerivation algorithmIdentifier // PBKDF2 + params
 	Encryption    algorithmIdentifier // aes256-CBC + IV OCTET STRING
 }
-type loginASN1 struct { // logins.json entry: { keyID, {des-ede3-cbc, iv}, cipher }
+type loginASN1 struct { // logins.json entry: { keyID, {algorithm OID, IV}, cipher }
 	KeyID  []byte
 	Algo   algorithmIdentifier
 	Cipher []byte
 }
 
 var (
-	oidPBES2      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
-	oid3DESLegacy = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 5, 1, 3}
+	oidPBES2            = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
+	oidPBKDF2           = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
+	oid3DESLegacy       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 12, 5, 1, 3}
+	oidLogin3DES        = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
+	oidLoginAES256      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
+	oidPBKDF2HMACSHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
 )
 
 func pkcs7Unpad(b []byte, blockSize int) ([]byte, error) {
+	if blockSize <= 0 {
+		return nil, errors.New("invalid padding block size")
+	}
 	if len(b) == 0 || len(b)%blockSize != 0 {
 		return nil, fmt.Errorf("invalid padded length %d", len(b))
 	}
@@ -95,6 +102,15 @@ func deriveKeyPBES2(globalSalt, entrySalt []byte, iterations int) []byte {
 }
 
 func aesCBCDecrypt(key, iv, ct []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("aes-256: invalid key length %d", len(key))
+	}
+	if len(iv) != aes.BlockSize {
+		return nil, fmt.Errorf("aes-256: invalid IV length %d", len(iv))
+	}
+	if len(ct) == 0 || len(ct)%aes.BlockSize != 0 {
+		return nil, errors.New("aes-256: ciphertext must be a non-empty multiple of block size")
+	}
 	blk, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -108,6 +124,15 @@ func aesCBCDecrypt(key, iv, ct []byte) ([]byte, error) {
 }
 
 func des3CBCDecrypt(key, iv, ct []byte) ([]byte, error) {
+	if len(key) != 24 {
+		return nil, fmt.Errorf("3des: invalid key length %d", len(key))
+	}
+	if len(iv) != des.BlockSize {
+		return nil, fmt.Errorf("3des: invalid IV length %d", len(iv))
+	}
+	if len(ct) == 0 || len(ct)%des.BlockSize != 0 {
+		return nil, errors.New("3des: ciphertext must be a non-empty multiple of block size")
+	}
 	blk, err := des.NewTripleDESCipher(key)
 	if err != nil {
 		return nil, err
@@ -133,9 +158,21 @@ func decryptPBEItem(globalSalt, raw []byte) ([]byte, error) {
 		if _, err := asn1.Unmarshal(item.Algo.Parameters.FullBytes, &p); err != nil {
 			return nil, err
 		}
+		if !p.KeyDerivation.Algorithm.Equal(oidPBKDF2) {
+			return nil, fmt.Errorf("unsupported PBES2 key derivation algorithm %v", p.KeyDerivation.Algorithm)
+		}
 		var kdf pbkdf2Params
 		if _, err := asn1.Unmarshal(p.KeyDerivation.Parameters.FullBytes, &kdf); err != nil {
 			return nil, err
+		}
+		if !p.Encryption.Algorithm.Equal(oidLoginAES256) {
+			return nil, fmt.Errorf("unsupported PBES2 cipher algorithm %v", p.Encryption.Algorithm)
+		}
+		if kdf.Iterations <= 0 || (kdf.KeyLength != 0 && kdf.KeyLength != 32) {
+			return nil, errors.New("invalid PBKDF2 parameters")
+		}
+		if len(kdf.Prf.Algorithm) != 0 && !kdf.Prf.Algorithm.Equal(oidPBKDF2HMACSHA256) {
+			return nil, fmt.Errorf("unsupported PBKDF2 PRF %v", kdf.Prf.Algorithm)
 		}
 		var iv14 []byte
 		if _, err := asn1.Unmarshal(p.Encryption.Parameters.FullBytes, &iv14); err != nil {
@@ -170,9 +207,20 @@ func legacy3DESKeyIV(globalSalt, entrySalt []byte) (key, iv []byte) {
 	return k[:24], k[len(k)-8:]
 }
 
-// recoverMasterKey reads key4.db, verifies password-check, and returns the 24-byte
-// 3DES master key from nssPrivate.a11.
+// recoverMasterKey preserves the legacy single-key lookup used by old profiles.
 func recoverMasterKey(key4Path string) ([]byte, error) {
+	return recoverKey4Secret(key4Path, nil, 24)
+}
+
+// recoverKey4Secret verifies the key4.db password check, selects the wrapped
+// SDR key by CKA_ID when supplied, and returns its expected key bytes. NSS
+// stores the per-login key ID in logins.json and in nssPrivate.a102; selecting
+// the matching row is required because a profile can contain both legacy
+// 3DES and newer AES keys during migration.
+func recoverKey4Secret(key4Path string, keyID []byte, keyLen int) ([]byte, error) {
+	if keyLen != 24 && keyLen != 32 {
+		return nil, fmt.Errorf("unsupported SDR key length %d", keyLen)
+	}
 	// Through dbSource, not a bare immutable=1 connection. key4.db is a
 	// rollback-journal database, and immutable=1 tells SQLite to skip recovery
 	// entirely: against a hot journal it hands back pre-commit page images with
@@ -193,47 +241,86 @@ func recoverMasterKey(key4Path string) ([]byte, error) {
 	}
 	check, err := decryptPBEItem(globalSalt, item2)
 	if err == nil {
-		check, err = pkcs7Unpad(check, blockSizeFor(item2))
+		var blockSize int
+		blockSize, err = blockSizeFor(item2)
+		if err == nil {
+			check, err = pkcs7Unpad(check, blockSize)
+		}
 	}
 	if err != nil || !bytes.Equal(check, []byte("password-check")) {
 		return nil, ErrMasterPassword
 	}
 
 	var a11 []byte
-	if err := db.queryOne(`SELECT a11 FROM nssPrivate WHERE a11 IS NOT NULL LIMIT 1`, &a11); err != nil {
+	if len(keyID) == 0 {
+		err = db.queryOne(`SELECT a11 FROM nssPrivate WHERE a11 IS NOT NULL LIMIT 1`, &a11)
+	} else {
+		rows, queryErr := db.Query(`SELECT a11 FROM nssPrivate WHERE a102 = ? AND a11 IS NOT NULL LIMIT 1`, keyID)
+		if queryErr != nil {
+			err = queryErr
+		} else {
+			defer rows.Close()
+			if !rows.Next() {
+				if rows.Err() != nil {
+					err = rows.Err()
+				} else {
+					err = fmt.Errorf("no NSS key matches login KeyID")
+				}
+			} else {
+				err = rows.Scan(&a11)
+			}
+		}
+	}
+	if err != nil {
 		return nil, fmt.Errorf("reading nssPrivate: %w", err)
 	}
 	dec, err := decryptPBEItem(globalSalt, a11)
 	if err != nil {
 		return nil, err
 	}
-	// The master key blob is an ASN.1 { OID, OCTET STRING key } after unpad; but
-	// in practice NSS stores the 24-byte 3DES key as the last 24 bytes. Unpad then
-	// take the trailing 24 bytes.
-	dec, err = pkcs7Unpad(dec, blockSizeFor(a11))
+	// NSS stores the SDR key bytes at the end of the unpadded key blob. Take the
+	// key length implied by the login cipher (24 bytes for 3DES, 32 for AES-256).
+	blockSize, err := blockSizeFor(a11)
 	if err != nil {
 		return nil, err
 	}
-	if len(dec) < 24 {
-		return nil, fmt.Errorf("master key too short: %d", len(dec))
+	dec, err = pkcs7Unpad(dec, blockSize)
+	if err != nil {
+		return nil, err
 	}
-	return dec[len(dec)-24:], nil
+	if len(dec) < keyLen {
+		return nil, fmt.Errorf("NSS key material too short: need %d bytes, got %d", keyLen, len(dec))
+	}
+	return append([]byte(nil), dec[len(dec)-keyLen:]...), nil
 }
 
-func blockSizeFor(raw []byte) int {
+func blockSizeFor(raw []byte) (int, error) {
 	var item encryptedItem
-	if _, err := asn1.Unmarshal(raw, &item); err == nil && item.Algo.Algorithm.Equal(oidPBES2) {
-		return 16
+	if rest, err := asn1.Unmarshal(raw, &item); err != nil || len(rest) != 0 {
+		if err == nil {
+			err = errors.New("trailing ASN.1 data")
+		}
+		return 0, fmt.Errorf("invalid encrypted item: %w", err)
 	}
-	return 8
+	switch {
+	case item.Algo.Algorithm.Equal(oidPBES2):
+		var p pbes2Params
+		if _, err := asn1.Unmarshal(item.Algo.Parameters.FullBytes, &p); err != nil {
+			return 0, err
+		}
+		if !p.Encryption.Algorithm.Equal(oidLoginAES256) {
+			return 0, fmt.Errorf("unsupported PBES2 cipher algorithm %v", p.Encryption.Algorithm)
+		}
+		return aes.BlockSize, nil
+	case item.Algo.Algorithm.Equal(oid3DESLegacy):
+		return des.BlockSize, nil
+	default:
+		return 0, fmt.Errorf("unsupported PBE algorithm %v", item.Algo.Algorithm)
+	}
 }
 
 // LoadCredentials decrypts logins.json into a host/user -> password map.
 func LoadCredentials(profileDir string) (*Credentials, error) {
-	masterKey, err := recoverMasterKey(filepath.Join(profileDir, "key4.db"))
-	if err != nil {
-		return nil, err
-	}
 	data, err := os.ReadFile(filepath.Join(profileDir, "logins.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -252,11 +339,16 @@ func LoadCredentials(profileDir string) (*Credentials, error) {
 		return nil, err
 	}
 	creds := &Credentials{byHostUser: map[string]string{}}
+	keyCache := map[string][]byte{}
+	key4Path := filepath.Join(profileDir, "key4.db")
 	for _, l := range file.Logins {
-		user, err1 := decryptLogin(masterKey, l.EncryptedUsername)
-		pass, err2 := decryptLogin(masterKey, l.EncryptedPassword)
+		user, err1 := decryptLoginFromProfile(key4Path, l.EncryptedUsername, keyCache)
+		pass, err2 := decryptLoginFromProfile(key4Path, l.EncryptedPassword, keyCache)
 		if err1 != nil || err2 != nil {
-			continue
+			if err1 != nil {
+				return nil, fmt.Errorf("decrypting stored login: %w", err1)
+			}
+			return nil, fmt.Errorf("decrypting stored login: %w", err2)
 		}
 		host := hostOnly(l.Hostname) // "imap://imap.example.com" -> "imap.example.com"
 		creds.byHostUser[credKey(host, user)] = pass
@@ -265,23 +357,81 @@ func LoadCredentials(profileDir string) (*Credentials, error) {
 }
 
 func decryptLogin(masterKey []byte, b64 string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(b64)
+	login, iv, err := parseLogin(b64)
 	if err != nil {
 		return "", err
 	}
-	var l loginASN1
-	if _, err := asn1.Unmarshal(raw, &l); err != nil {
+	return decryptLoginRecord(masterKey, login, iv)
+}
+
+func decryptLoginFromProfile(key4Path, b64 string, keyCache map[string][]byte) (string, error) {
+	login, iv, err := parseLogin(b64)
+	if err != nil {
 		return "", err
+	}
+	keyLen, _, err := loginAlgorithmSizes(login.Algo.Algorithm)
+	if err != nil {
+		return "", err
+	}
+	cacheKey := login.Algo.Algorithm.String() + ":" + string(login.KeyID)
+	key, ok := keyCache[cacheKey]
+	if !ok {
+		key, err = recoverKey4Secret(key4Path, login.KeyID, keyLen)
+		if err != nil {
+			return "", err
+		}
+		keyCache[cacheKey] = key
+	}
+	return decryptLoginRecord(key, login, iv)
+}
+
+func parseLogin(b64 string) (loginASN1, []byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return loginASN1{}, nil, err
+	}
+	var l loginASN1
+	rest, err := asn1.Unmarshal(raw, &l)
+	if err != nil {
+		return loginASN1{}, nil, err
+	}
+	if len(rest) != 0 {
+		return loginASN1{}, nil, errors.New("trailing ASN.1 data in login")
 	}
 	var iv []byte
 	if _, err := asn1.Unmarshal(l.Algo.Parameters.FullBytes, &iv); err != nil {
-		return "", err
+		return loginASN1{}, nil, err
 	}
-	pt, err := des3CBCDecrypt(masterKey, iv, l.Cipher)
+	return l, iv, nil
+}
+
+func loginAlgorithmSizes(oid asn1.ObjectIdentifier) (keyLen, blockSize int, err error) {
+	switch {
+	case oid.Equal(oidLoginAES256):
+		return 32, aes.BlockSize, nil
+	case oid.Equal(oidLogin3DES):
+		return 24, des.BlockSize, nil
+	default:
+		return 0, 0, fmt.Errorf("unsupported login encryption algorithm %v", oid)
+	}
+}
+
+func decryptLoginRecord(key []byte, login loginASN1, iv []byte) (string, error) {
+	_, blockSize, err := loginAlgorithmSizes(login.Algo.Algorithm)
 	if err != nil {
 		return "", err
 	}
-	pt, err = pkcs7Unpad(pt, 8)
+	var pt []byte
+	switch {
+	case login.Algo.Algorithm.Equal(oidLoginAES256):
+		pt, err = aesCBCDecrypt(key, iv, login.Cipher)
+	case login.Algo.Algorithm.Equal(oidLogin3DES):
+		pt, err = des3CBCDecrypt(key, iv, login.Cipher)
+	}
+	if err != nil {
+		return "", err
+	}
+	pt, err = pkcs7Unpad(pt, blockSize)
 	if err != nil {
 		return "", err
 	}

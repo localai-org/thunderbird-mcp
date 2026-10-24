@@ -59,6 +59,60 @@ var _ = Describe("LoadCredentials (generated fixture)", func() {
 		_, err := LoadCredentials(dir)
 		Expect(err).To(MatchError(ErrMasterPassword))
 	})
+
+	It("decrypts AES-256 logins by selecting the matching NSS KeyID", func() {
+		dir := GinkgoT().TempDir()
+		writeNSSFixture(dir, "") // includes an earlier 3DES key row
+
+		aesKey := []byte("0123456789abcdef0123456789abcdef")
+		aesKeyID := []byte("aes-key-id-00001")
+		emptyKey := derivePBES2(fxGlobalSalt, fxEntrySalt, fxIters, "")
+		db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "key4.db"))
+		Expect(err).NotTo(HaveOccurred())
+		_, err = db.Exec(`INSERT INTO nssPrivate (a11, a102) VALUES (?, ?)`, buildPBES2Item(emptyKey, aesKey), aesKeyID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(db.Close()).To(Succeed())
+
+		makeAESLogin := func(plaintext string) string {
+			iv := []byte("0123456789abcdef")
+			ivDER, marshalErr := asn1.Marshal(iv)
+			Expect(marshalErr).NotTo(HaveOccurred())
+			der, marshalErr := asn1.Marshal(loginASN1{
+				KeyID:  aesKeyID,
+				Algo:   algorithmIdentifier{Algorithm: oidAES256CBC, Parameters: asn1.RawValue{FullBytes: ivDER}},
+				Cipher: aesCBCEncrypt(aesKey, iv, pkcs7Pad([]byte(plaintext), aes.BlockSize)),
+			})
+			Expect(marshalErr).NotTo(HaveOccurred())
+			return base64.StdEncoding.EncodeToString(der)
+		}
+		data, err := json.Marshal(map[string]any{"logins": []map[string]any{{
+			"hostname":          "imap://aes.example.com",
+			"encryptedUsername": makeAESLogin("aes-user@example.com"),
+			"encryptedPassword": makeAESLogin("synthetic-aes-password"),
+		}}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.WriteFile(filepath.Join(dir, "logins.json"), data, 0o600)).To(Succeed())
+
+		creds, err := LoadCredentials(dir)
+		Expect(err).NotTo(HaveOccurred())
+		pw, ok := creds.Lookup("aes.example.com", "aes-user@example.com")
+		Expect(ok).To(BeTrue())
+		Expect(pw).To(Equal("synthetic-aes-password"))
+	})
+
+	It("keeps malformed and unsupported login encryption as errors, not panics", func() {
+		mkLogin := func(oid asn1.ObjectIdentifier, iv []byte) string {
+			ivDER, err := asn1.Marshal(iv)
+			Expect(err).NotTo(HaveOccurred())
+			der, err := asn1.Marshal(loginASN1{Algo: algorithmIdentifier{Algorithm: oid, Parameters: asn1.RawValue{FullBytes: ivDER}}, Cipher: []byte("not ciphertext")})
+			Expect(err).NotTo(HaveOccurred())
+			return base64.StdEncoding.EncodeToString(der)
+		}
+		_, err := decryptLogin(make([]byte, 32), mkLogin(oidAES256CBC, make([]byte, 8)))
+		Expect(err).To(HaveOccurred())
+		_, err = decryptLogin(make([]byte, 32), mkLogin(asn1.ObjectIdentifier{1, 2, 3, 4}, make([]byte, 16)))
+		Expect(err).To(HaveOccurred())
+	})
 })
 
 // ---- test-only crypto helpers (production only decrypts) ----
@@ -91,7 +145,6 @@ func des3CBCEncrypt(key, iv, pt []byte) []byte {
 // ---- OIDs used only when building the fixture ----
 
 var (
-	oidPBKDF2     = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
 	oidHmacSHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
 	oidAES256CBC  = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
 	oidDES3CBC    = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
