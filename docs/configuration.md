@@ -78,5 +78,54 @@ decryption is not possible; the server logs a warning at startup and continues
 with the read-only search/contacts/calendar tools available (IMAP/SMTP actions
 then fail with a clear error).
 
-**OAuth2** accounts (common for Gmail/Outlook) are not supported for live
-IMAP/SMTP; they still appear in index search.
+### Gmail OAuth2
+
+The server reuses an existing Gmail refresh grant from Thunderbird’s NSS store.
+It does not open a browser, request consent, or write credentials to the profile.
+Other OAuth2 providers, including Outlook, remain unsupported for live IMAP/SMTP.
+Their indexed mail remains searchable.
+
+1. Sign in to your Gmail account in Thunderbird with permission to access mail.
+2. Configure the IMAP and SMTP authentication methods as **OAuth2** in Thunderbird.
+3. Select **SSL/TLS** or **STARTTLS** for each server. Plaintext OAuth2 connections are rejected.
+4. Start this server with the same profile. No OAuth environment variables are required.
+5. To enable sending, set `THUNDERBIRD_ALLOW_SEND=true`. Read-only mode still disables sending.
+
+Supported hosts are `imap.gmail.com`, `imap.googlemail.com`, `smtp.gmail.com`,
+`smtp.googlemail.com`, and `smtp-relay.gmail.com`.
+A supported hostname does not override Google’s account or relay policies.
+The configured authentication username must exactly match the saved grant’s username.
+IMAP folder selection also matches the URI username, including percent-escaped usernames, rather than the hostname alone.
+
+The saved login must use origin `oauth://accounts.google.com`.
+Its `httpRealm` must contain `https://mail.google.com/` as a complete scope.
+Calendar-only and contacts-only grants do not authorize mail.
+Missing or rejected grants produce an actionable error, without a password fallback.
+Sign in again through Thunderbird with mail access, then restart this server to reload credentials.
+
+#### Client compatibility
+
+Refresh grants belong to the OAuth client that issued them.
+The implementation therefore uses Thunderbird’s built-in Google client identity and fixed token endpoint,
+not a separate application registration.
+Custom registrations and extension-provided OAuth clients are unsupported.
+Changes to Thunderbird’s registration or Google’s policies can require an implementation update.
+The embedded desktop `client_secret` is public registration data, not a confidentiality boundary.
+
+The source reference is Mozilla’s
+[OAuth2Providers.sys.mjs at commit `646deeb1ba4261849e8d0077816a1c42edcb56d3`](https://github.com/mozilla/releases-comm-central/blob/646deeb1ba4261849e8d0077816a1c42edcb56d3/mailnews/base/src/OAuth2Providers.sys.mjs).
+Its Google entry defines the client identity, token endpoint, host mappings, and mail scope.
+The adjacent [OAuth2Module.sys.mjs](https://github.com/mozilla/releases-comm-central/blob/646deeb1ba4261849e8d0077816a1c42edcb56d3/mailnews/base/src/OAuth2Module.sys.mjs)
+and [OAuth2.sys.mjs](https://github.com/mozilla/releases-comm-central/blob/646deeb1ba4261849e8d0077816a1c42edcb56d3/mailnews/base/src/OAuth2.sys.mjs)
+define saved-grant handling and refresh behavior.
+
+#### Cache and restart limitations
+
+IMAP and SMTP share an expiry-aware token cache in memory.
+The server refreshes tokens with less than one minute remaining.
+A shared lock coalesces concurrent refreshes and serializes token requests across users.
+Each refresh has a 15-second HTTP timeout.
+Rotated refresh tokens remain only in memory; the server never updates Thunderbird’s saved grant.
+After a restart, the server loads the original grant again.
+If Google invalidates that grant after rotation, sign in again through Thunderbird, then restart this server.
+Concurrent Thunderbird sessions can also affect grant validity.

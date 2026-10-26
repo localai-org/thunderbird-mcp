@@ -116,9 +116,20 @@ mcp:
     }
 ```
 
+## Gmail OAuth2
+
+Live IMAP and SMTP can reuse Gmail OAuth2 grants saved by Thunderbird.
+Sign in through Thunderbird first with mail access, then start this server.
+Both protocols require TLS or STARTTLS. No separate consent flow is available.
+Sending still requires `THUNDERBIRD_ALLOW_SEND=true`.
+
+See [Gmail setup and compatibility](docs/configuration.md#gmail-oauth2) for supported hosts,
+credential requirements, and recovery steps.
+
 ## Limitations (non-goals)
 
-- **OAuth2** accounts are not supported for live IMAP/SMTP (most Gmail/Outlook setups). They still appear in index search; live fetch/send report a clear "unsupported" error.
+- **OAuth2 providers other than Gmail**, including Outlook, are unsupported for live IMAP/SMTP. Their indexed mail remains searchable.
+- Gmail support requires Thunderbird’s built-in Google client registration. Custom OAuth clients and a new consent flow are unsupported.
 - A profile protected by a **master password** cannot have its credentials decrypted — the server logs a warning and keeps the read-only search/contacts/calendar tools working.
 - No calendar or contact **writes**.
 

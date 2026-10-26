@@ -36,3 +36,30 @@ sending actions at once.
 Passwords are decrypted only in memory and are never logged or returned by any
 tool. A master-password-protected profile cannot be decrypted; the server degrades
 to read-only rather than exposing an error in place of a credential.
+
+
+### Gmail OAuth2 grants
+
+OAuth logins retain their exact origin, username, and scope realm separately from password credentials.
+Password lookup never returns an OAuth refresh token.
+Only known Gmail hosts can select Google grants with the complete mail scope.
+The server rejects control characters in OAuth usernames before requesting a token.
+
+Token refresh uses the fixed HTTPS endpoint `https://www.googleapis.com/oauth2/v3/token`
+with normal certificate verification. The server rejects redirects.
+Requests have a 15-second timeout, and responses are limited to 64 KiB.
+Refresh errors do not expose response bodies, tokens, or transport error details.
+
+Mail authentication uses SASL XOAUTH2, not LOGIN, PLAIN, or OAUTHBEARER, for Gmail OAuth2 accounts.
+The server requires verified TLS or a successful STARTTLS upgrade before sending SASL credentials.
+It acknowledges SASL error challenges without returning their contents to callers.
+OAuth authentication errors do not expose server challenge text or SASL payloads.
+Existing password authentication remains available for accounts configured to use passwords.
+OAuth failures never silently fall back to passwords.
+
+Access tokens and rotated refresh tokens stay in process memory.
+Protect the process and profile as credentials: memory access can expose grants.
+The public desktop client identity does not keep refresh tokens confidential.
+No tool returns grants, and the server never writes them to Thunderbird’s files.
+See [cache and restart limitations](configuration.md#cache-and-restart-limitations) before relying on long-running grant reuse.
+OAuth support does not bypass the read-only, sending, identity, or recipient controls.
