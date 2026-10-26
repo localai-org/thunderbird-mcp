@@ -13,8 +13,10 @@ import (
 )
 
 type IMAP struct {
-	cfg   *Config
-	creds *Credentials
+	cfg       *Config
+	creds     *Credentials
+	dial      func(string, string) (net.Conn, error)
+	tlsConfig *tls.Config
 }
 
 func NewIMAP(cfg *Config, creds *Credentials) *IMAP { return &IMAP{cfg: cfg, creds: creds} }
@@ -32,42 +34,86 @@ func (m *IMAP) accountForFolderURI(uri string) (*Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("bad folder uri %q: %w", uri, err)
 	}
+	if u.Scheme != "imap" || u.User == nil {
+		return nil, fmt.Errorf("IMAP folder requires an account username")
+	}
 	host := u.Hostname()
+	var match *Account
 	for i := range m.cfg.Accounts {
 		a := &m.cfg.Accounts[i]
-		if a.Type == "imap" && a.Hostname == host {
-			return a, nil
+		if a.Type == "imap" && strings.EqualFold(a.Hostname, host) && a.Username == u.User.Username() {
+			if match != nil {
+				return nil, fmt.Errorf("ambiguous IMAP folder account")
+			}
+			match = a
 		}
+	}
+	if match != nil {
+		return match, nil
 	}
 	return nil, fmt.Errorf("no IMAP account matches folder %q", uri)
 }
 
 func (m *IMAP) connect(a *Account) (*imapclient.Client, error) {
+	var pw string
+	var auth *xoauth2Client
 	if a.AuthMethod == 10 {
-		return nil, fmt.Errorf("account %s uses OAuth2, which is not supported in this version", a.Hostname)
-	}
-	pw, ok := m.creds.Lookup(a.Hostname, a.Username)
-	if !ok {
-		return nil, fmt.Errorf("no stored password for %s@%s", a.Username, a.Hostname)
+		if a.SocketType != 2 && a.SocketType != 3 {
+			return nil, fmt.Errorf("OAuth2 requires TLS or STARTTLS")
+		}
+		token, err := m.creds.gmailAccessToken(a.Hostname, a.Username)
+		if err != nil {
+			return nil, err
+		}
+		auth = &xoauth2Client{user: a.Username, token: token}
+	} else {
+		var ok bool
+		pw, ok = m.creds.Lookup(a.Hostname, a.Username)
+		if !ok {
+			return nil, fmt.Errorf("no stored password for %s@%s", a.Username, a.Hostname)
+		}
 	}
 	addr := a.hostPort()
 	opts := &imapclient.Options{TLSConfig: &tls.Config{ServerName: a.Hostname}}
+	if m.tlsConfig != nil {
+		opts.TLSConfig = m.tlsConfig
+	}
 	var (
 		c   *imapclient.Client
 		err error
 	)
-	switch a.SocketType {
-	case 3: // SSL/TLS
-		c, err = imapclient.DialTLS(addr, opts)
-	case 2: // STARTTLS
-		c, err = imapclient.DialStartTLS(addr, opts)
-	default: // 0 plain (also used by the in-memory test server)
-		c, err = imapclient.DialInsecure(addr, opts)
+	if m.dial != nil {
+		conn, e := m.dial("tcp", addr)
+		if e != nil {
+			return nil, e
+		}
+		switch a.SocketType {
+		case 3:
+			c = imapclient.New(tls.Client(conn, opts.TLSConfig), opts)
+		case 2:
+			c, err = imapclient.NewStartTLS(conn, opts)
+		default:
+			c = imapclient.New(conn, opts)
+		}
+	} else {
+		switch a.SocketType {
+		case 3: // SSL/TLS
+			c, err = imapclient.DialTLS(addr, opts)
+		case 2: // STARTTLS
+			c, err = imapclient.DialStartTLS(addr, opts)
+		default: // 0 plain (also used by the in-memory test server)
+			c, err = imapclient.DialInsecure(addr, opts)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", addr, err)
 	}
-	if err := c.Login(a.Username, pw).Wait(); err != nil {
+	if auth != nil {
+		if err := c.Authenticate(auth); err != nil || auth.challenged {
+			c.Close()
+			return nil, fmt.Errorf("Gmail IMAP OAuth2 authentication rejected; sign in again in Thunderbird")
+		}
+	} else if err := c.Login(a.Username, pw).Wait(); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("IMAP login failed for %s: %w", a.Username, err)
 	}

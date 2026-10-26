@@ -68,8 +68,10 @@ func BuildRFC822(msg OutgoingMessage) ([]byte, error) {
 var fixedNow = time.Now
 
 type Sender struct {
-	cfg   *Config
-	creds *Credentials
+	cfg       *Config
+	creds     *Credentials
+	dial      func(string, string) (net.Conn, error)
+	tlsConfig *tls.Config
 }
 
 func NewSender(cfg *Config, creds *Credentials) *Sender { return &Sender{cfg: cfg, creds: creds} }
@@ -103,19 +105,28 @@ func (s *Sender) Send(msg OutgoingMessage) error {
 	if err != nil {
 		return err
 	}
+	var auth sasl.Client
 	if srv.AuthMethod == 10 {
-		return fmt.Errorf("SMTP server %s uses OAuth2, which is not supported in this version", srv.Hostname)
-	}
-	pw, ok := s.creds.Lookup(srv.Hostname, srv.Username)
-	if !ok {
-		return fmt.Errorf("no stored password for SMTP %s@%s", srv.Username, srv.Hostname)
+		if srv.SocketType != 2 && srv.SocketType != 3 {
+			return fmt.Errorf("OAuth2 requires TLS or STARTTLS")
+		}
+		token, err := s.creds.gmailAccessToken(srv.Hostname, srv.Username)
+		if err != nil {
+			return err
+		}
+		auth = &xoauth2Client{user: srv.Username, token: token}
+	} else {
+		pw, ok := s.creds.Lookup(srv.Hostname, srv.Username)
+		if !ok {
+			return fmt.Errorf("no stored password for SMTP %s@%s", srv.Username, srv.Hostname)
+		}
+		auth = sasl.NewPlainClient("", srv.Username, pw)
 	}
 	raw, err := BuildRFC822(msg)
 	if err != nil {
 		return err
 	}
 	rcpts := append(append(append([]string{}, msg.To...), msg.Cc...), msg.Bcc...)
-	auth := sasl.NewPlainClient("", srv.Username, pw)
 	addr := net.JoinHostPort(srv.Hostname, strconv.Itoa(srv.Port))
 	tlsConf := &tls.Config{ServerName: srv.Hostname}
 
@@ -130,17 +141,37 @@ func (s *Sender) Send(msg OutgoingMessage) error {
 		}
 		return c.Quit()
 	}
-	if srv.SocketType == 3 { // implicit TLS
-		return smtp.SendMailTLS(addr, auth, msg.From[0], rcpts, bytes.NewReader(raw))
+	if s.tlsConfig != nil {
+		tlsConf = s.tlsConfig
 	}
-	// STARTTLS (SocketType 2) — dial, upgrade to TLS, auth, then send.
-	c, err := smtp.DialStartTLS(addr, tlsConf)
+	var c *smtp.Client
+	if s.dial != nil {
+		conn, e := s.dial("tcp", addr)
+		if e != nil {
+			return e
+		}
+		if srv.SocketType == 3 {
+			c = smtp.NewClient(tls.Client(conn, tlsConf))
+		} else {
+			c, err = smtp.NewClientStartTLS(conn, tlsConf)
+		}
+	} else if srv.SocketType == 3 {
+		c, err = smtp.DialTLS(addr, tlsConf)
+	} else {
+		c, err = smtp.DialStartTLS(addr, tlsConf)
+	}
 	if err != nil {
 		return err
 	}
 	defer c.Close()
 	if err := c.Auth(auth); err != nil {
+		if srv.AuthMethod == 10 {
+			return fmt.Errorf("Gmail SMTP OAuth2 authentication rejected; sign in again in Thunderbird")
+		}
 		return err
+	}
+	if x, ok := auth.(*xoauth2Client); ok && x.challenged {
+		return fmt.Errorf("Gmail SMTP OAuth2 authentication rejected")
 	}
 	if err := c.SendMail(msg.From[0], rcpts, bytes.NewReader(raw)); err != nil {
 		return err

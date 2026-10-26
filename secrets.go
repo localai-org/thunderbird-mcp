@@ -13,9 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -23,7 +27,12 @@ import (
 var ErrMasterPassword = errors.New("thunderbird profile is protected by a master password; credential decryption is not supported")
 
 type Credentials struct {
-	byHostUser map[string]string // "host\x00user" -> password
+	oauth          []oauthLogin
+	oauthMu        sync.Mutex
+	oauthCache     map[int]*oauthToken
+	oauthTransport http.RoundTripper // internal test seam; endpoints are never configurable
+	oauthNow       func() time.Time
+	byHostUser     map[string]string // "host\x00user" -> password
 }
 
 func credKey(host, user string) string { return host + "\x00" + user }
@@ -244,6 +253,7 @@ func LoadCredentials(profileDir string) (*Credentials, error) {
 	var file struct {
 		Logins []struct {
 			Hostname          string `json:"hostname"`
+			HTTPRealm         string `json:"httpRealm"`
 			EncryptedUsername string `json:"encryptedUsername"`
 			EncryptedPassword string `json:"encryptedPassword"`
 		} `json:"logins"`
@@ -256,6 +266,10 @@ func LoadCredentials(profileDir string) (*Credentials, error) {
 		user, err1 := decryptLogin(masterKey, l.EncryptedUsername)
 		pass, err2 := decryptLogin(masterKey, l.EncryptedPassword)
 		if err1 != nil || err2 != nil {
+			continue
+		}
+		if strings.HasPrefix(l.Hostname, "oauth:") {
+			creds.oauth = append(creds.oauth, oauthLogin{Origin: l.Hostname, Username: user, Realm: l.HTTPRealm, RefreshToken: pass})
 			continue
 		}
 		host := hostOnly(l.Hostname) // "imap://imap.example.com" -> "imap.example.com"
