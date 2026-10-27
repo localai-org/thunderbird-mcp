@@ -37,6 +37,7 @@ func (g *Gloda) Close() error {
 
 type SearchQuery struct {
 	Text, From, To, Subject, FolderURI string
+	AccountRoot                        string // URI authority, without a trailing slash; empty means all accounts
 	Since, Until                       time.Time
 	Limit, Offset                      int
 }
@@ -69,6 +70,14 @@ func (g *Gloda) Search(q SearchQuery) ([]MessageSummary, error) {
 	like("t.c3author", q.From)
 	like("t.c4recipients", q.To)
 	like("t.c1subject", q.Subject)
+	if q.AccountRoot != "" {
+		// Include the slash to exclude lookalike authorities. Escape SQL LIKE
+		// wildcards in usernames/hosts; also compare the literal prefix because
+		// SQLite LIKE is ASCII case-insensitive even for distinct usernames.
+		prefix := q.AccountRoot + "/"
+		sb.WriteString(" AND f.folderURI LIKE ? ESCAPE '\\' AND substr(f.folderURI, 1, ?) = ?")
+		args = append(args, escapeLike(prefix)+"%", len([]rune(prefix)), prefix)
+	}
 	if q.FolderURI != "" {
 		sb.WriteString(" AND f.folderURI = ?")
 		args = append(args, q.FolderURI)

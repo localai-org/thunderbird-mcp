@@ -9,9 +9,9 @@ relevant to the chosen action are used.
 | --- | --- |
 | `list_accounts` | — |
 | `list_folders` | `account?` |
-| `search_messages` | `query?`, `sender?`, `recipient?`, `subject?`, `folder?`, `since?`, `until?`, `limit?`, `offset?` |
+| `search_messages` | `account?`, `query?`, `sender?`, `recipient?`, `subject?`, `folder?`, `since?`, `until?`, `limit?`, `offset?` |
 | `get_message` | `message_ref`, `body_format?` (`text`\|`html`) |
-| `list_recent` | `folder?`, `limit?` |
+| `list_recent` | `account?`, `folder?`, `limit?` |
 | `set_flags` | `message_ref`, `read?`, `flagged?`, `add_tags?`, `remove_tags?` |
 | `move_message` | `message_ref`, `destination` |
 | `delete_message` | `message_ref`, `permanent?` |
@@ -43,3 +43,10 @@ Dates accept RFC3339 or `YYYY-MM-DD`.
 
 Calendar ranges use overlap and an exclusive RFC3339 `until`. Date-only `until` includes the whole UTC date.
 See [calendar ranges and recurrence](calendar.md) for bounds, timezone policy, and unsupported recurrence forms.
+
+For `search_messages` and `list_recent`, `account` is a key returned by
+`list_accounts`. Omit it to query all indexed accounts; unknown keys return an
+error. When both `account` and `folder` are supplied, both must match.
+`limit` is an integer maximum result count (default 20 for omitted/nonpositive
+values, no explicit upper cap); for example, `{"action":"list_recent","account":"account1","limit":200}`
+returns up to the latest 200 indexed messages in that account.

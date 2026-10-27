@@ -171,8 +171,9 @@ type GetMessageOutput struct {
 }
 
 type ListRecentInput struct {
-	Folder string `json:"folder,omitempty" jsonschema:"folder URI; omit for across all folders"`
-	Limit  int    `json:"limit,omitempty"`
+	Account string `json:"account,omitempty" jsonschema:"optional account key to filter (see list_accounts)"`
+	Folder  string `json:"folder,omitempty" jsonschema:"folder URI; omit for across all folders"`
+	Limit   int    `json:"limit,omitempty"`
 }
 type ListRecentOutput struct {
 	Messages []MessageSummary `json:"messages"`
@@ -322,7 +323,7 @@ type AttachmentData struct {
 
 type MailInput struct {
 	Action      string   `json:"action" jsonschema:"the mail operation to perform"`
-	Account     string   `json:"account,omitempty" jsonschema:"list_folders: restrict to this account key"`
+	Account     string   `json:"account,omitempty" jsonschema:"list_folders/search_messages/list_recent: restrict to this account key (see list_accounts)"`
 	Query       string   `json:"query,omitempty" jsonschema:"search_messages: free text over subject and indexed body"`
 	Sender      string   `json:"sender,omitempty" jsonschema:"search_messages: filter by sender"`
 	Recipient   string   `json:"recipient,omitempty" jsonschema:"search_messages: filter by recipient"`

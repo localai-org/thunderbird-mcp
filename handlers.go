@@ -35,7 +35,7 @@ func ThunderbirdMail(ctx context.Context, req *mcp.CallToolRequest, in MailInput
 		_, o, err := ListFolders(ctx, req, ListFoldersInput{Account: in.Account})
 		return nil, MailOutput{Folders: o.Folders}, err
 	case "search_messages":
-		_, o, err := SearchMessages(ctx, req, SearchMessagesInput{Query: in.Query, From: in.Sender, To: in.Recipient, Subject: in.Subject, Folder: in.Folder, Since: in.Since, Until: in.Until, Limit: in.Limit, Offset: in.Offset})
+		_, o, err := SearchMessages(ctx, req, SearchMessagesInput{Account: in.Account, Query: in.Query, From: in.Sender, To: in.Recipient, Subject: in.Subject, Folder: in.Folder, Since: in.Since, Until: in.Until, Limit: in.Limit, Offset: in.Offset})
 		return nil, MailOutput{Messages: o.Messages, Count: o.Count}, err
 	case "get_message":
 		_, o, err := GetMessage(ctx, req, GetMessageInput{MessageRef: in.MessageRef, BodyFormat: in.BodyFormat})
@@ -44,7 +44,7 @@ func ThunderbirdMail(ctx context.Context, req *mcp.CallToolRequest, in MailInput
 		}
 		return nil, MailOutput{Message: &o.Message}, nil
 	case "list_recent":
-		_, o, err := ListRecent(ctx, req, ListRecentInput{Folder: in.Folder, Limit: in.Limit})
+		_, o, err := ListRecent(ctx, req, ListRecentInput{Account: in.Account, Folder: in.Folder, Limit: in.Limit})
 		return nil, MailOutput{Messages: o.Messages, Count: o.Count}, err
 	case "get_attachment":
 		result, err := GetAttachment(ctx, req, GetAttachmentInput{MessageRef: in.MessageRef, Index: in.Index})
@@ -181,8 +181,13 @@ func SearchMessages(_ context.Context, _ *mcp.CallToolRequest, in SearchMessages
 	if err != nil {
 		return nil, SearchMessagesOutput{}, fmt.Errorf("invalid until: %w", err)
 	}
+	accountRoot, err := app.accountFolderRoot(in.Account)
+	if err != nil {
+		return nil, SearchMessagesOutput{}, err
+	}
 	res, err := app.Gloda.Search(SearchQuery{
-		Text: in.Query, From: in.From, To: in.To, Subject: in.Subject,
+		AccountRoot: accountRoot,
+		Text:        in.Query, From: in.From, To: in.To, Subject: in.Subject,
 		FolderURI: in.Folder, Since: since, Until: until,
 		Limit: in.Limit, Offset: in.Offset,
 	})
@@ -235,7 +240,11 @@ func ListRecent(_ context.Context, _ *mcp.CallToolRequest, in ListRecentInput) (
 	if limit <= 0 {
 		limit = 20
 	}
-	res, err := app.Gloda.Recent(in.Folder, limit)
+	accountRoot, err := app.accountFolderRoot(in.Account)
+	if err != nil {
+		return nil, ListRecentOutput{}, err
+	}
+	res, err := app.Gloda.Search(SearchQuery{AccountRoot: accountRoot, FolderURI: in.Folder, Limit: limit})
 	if err != nil {
 		return nil, ListRecentOutput{}, err
 	}

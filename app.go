@@ -104,3 +104,48 @@ func (a *App) localAccountFor(folderURI string) (*Account, error) {
 	}
 	return nil, fmt.Errorf("no local account for %q", folderURI)
 }
+
+// accountFolderRoot maps a configured account key to the URI authority used by
+// Thunderbird's index. An omitted key deliberately leaves the query unscoped.
+func (a *App) accountFolderRoot(key string) (string, error) {
+	if key == "" {
+		return "", nil
+	}
+	for _, account := range a.Config.Accounts {
+		if account.Key != key {
+			continue
+		}
+		scheme := "imap"
+		if account.IsLocal() {
+			scheme = "mailbox"
+		} else if account.Type != "imap" {
+			return "", fmt.Errorf("unsupported account type %q", account.Type)
+		}
+		user := ""
+		if account.Username != "" {
+			user = escapeServerURI(account.Username, false) + "@"
+		}
+		return scheme + "://" + user + escapeServerURI(account.Hostname, true), nil
+	}
+	return "", fmt.Errorf("unknown account key %q (see list_accounts)", key)
+}
+
+// escapeServerURI mirrors GetServerURI's MsgEscapeString: ESCAPE_XALPHAS
+// for usernames and ESCAPE_URL_PATH for hostnames, not Go's PathEscape.
+// See mailnews/base/src/nsMsgIncomingServer.cpp and xpcom/io/nsEscape.cpp
+// (netCharType bits 1 and 4). Percent escapes operate on UTF-8 bytes.
+func escapeServerURI(s string, host bool) string {
+	const hex = "0123456789ABCDEF"
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("*-._", rune(c)) || host && (c == '+' || c == '/') {
+			out.WriteByte(c)
+		} else {
+			out.WriteByte('%')
+			out.WriteByte(hex[c>>4])
+			out.WriteByte(hex[c&15])
+		}
+	}
+	return out.String()
+}
