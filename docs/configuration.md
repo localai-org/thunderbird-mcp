@@ -8,6 +8,39 @@
 | `THUNDERBIRD_READ_ONLY` | `false` | When `true`, mutating and sending actions are removed. |
 | `THUNDERBIRD_ALLOW_SEND` | `false` | When `true`, the compose/send actions are enabled. |
 | `THUNDERBIRD_TOOLS` | all | Comma-separated allowlist of tool names (`thunderbird_mail`, `thunderbird_contacts`, `thunderbird_calendar`). |
+| `THUNDERBIRD_HTTP_ADDR` | unset (stdio) | `host:port` to serve MCP over HTTP instead of stdio. Requires a token. |
+| `THUNDERBIRD_HTTP_TOKEN` | unset | Bearer token for HTTP clients, at least 16 characters. |
+| `THUNDERBIRD_HTTP_TOKEN_FILE` | unset | File holding the token. Use it instead of `THUNDERBIRD_HTTP_TOKEN`, not with it. |
+| `THUNDERBIRD_HTTP_TLS_CERT`, `THUNDERBIRD_HTTP_TLS_KEY` | unset | PEM files to serve HTTPS. Set both or neither. |
+
+## Serving over HTTP
+
+By default the server speaks MCP over stdio. Set `THUNDERBIRD_HTTP_ADDR` to serve
+the Streamable HTTP transport instead, at `/mcp`:
+
+```sh
+export THUNDERBIRD_HTTP_ADDR=127.0.0.1:8080
+export THUNDERBIRD_HTTP_TOKEN_FILE=~/.config/thunderbird-mcp/token
+thunderbird-mcp
+```
+
+Clients send the token as `Authorization: Bearer <token>`. A request without it,
+or with a wrong one, gets `401`. The older HTTP+SSE transport is not offered.
+
+- **A token is always required**, on loopback too, because any web page the user
+  opens can send requests to a local port. The server will not start without one.
+- Prefer `THUNDERBIRD_HTTP_TOKEN_FILE`: an environment variable or a command-line
+  argument can show up in process listings. Generate a token with
+  `openssl rand -hex 32`.
+- Without `THUNDERBIRD_HTTP_TLS_CERT` and `THUNDERBIRD_HTTP_TLS_KEY` the server
+  speaks plain HTTP and logs a warning, so the token crosses the network in clear
+  text. Bind to loopback, or put a TLS reverse proxy in front.
+- A request that arrives on a loopback address with a non-loopback `Host` header
+  is refused with `403` (DNS rebinding protection). A reverse proxy on the same
+  machine must therefore send a loopback `Host` to the server, for example
+  `proxy_set_header Host 127.0.0.1:8080;` in nginx.
+- All HTTP sessions share one server, so they see the same profile and the same
+  read-only and send settings.
 
 ## Profile discovery
 

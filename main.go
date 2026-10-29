@@ -98,6 +98,13 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Read the transport settings before loading the profile, so a bad
+	// address or a missing token fails fast.
+	httpCfg, err := loadHTTPConfig(os.Getenv)
+	if err != nil {
+		return err
+	}
+
 	profileDir, err := discoverProfile()
 	if err != nil {
 		return err
@@ -145,6 +152,9 @@ func run() error {
 
 	// Run returns when the transport closes or ctx is cancelled by a signal;
 	// either way the deferred cleanup below runs.
+	if httpCfg != nil {
+		return serveHTTP(ctx, httpCfg, server)
+	}
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
