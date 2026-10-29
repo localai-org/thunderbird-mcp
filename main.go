@@ -47,6 +47,42 @@ func mustSchema[T any](enumValues []any) *jsonschema.Schema {
 	return s
 }
 
+// mailActionHelp says what each mail action does. Clients choose an action
+// from this text alone, and without it they invent names such as
+// "list_messages" that the schema then rejects.
+const mailActionHelp = "Thunderbird mail operations. Set `action` to one of the enum values. " +
+	"Read actions: list_accounts (accounts and their keys); list_folders (folders, optionally of one account); " +
+	"search_messages (filter by query, sender, recipient, subject, dates, account or folder); " +
+	"list_recent (newest indexed messages, optionally of one account or folder; this is how to list messages, there is no list_messages); " +
+	"get_message (full message by message_ref); get_attachment (one attachment by message_ref and index). " +
+	"set_flags/move_message/delete_message change messages and are unavailable in read-only mode. " +
+	"send_mail/reply_message/forward_message/save_draft require THUNDERBIRD_ALLOW_SEND=true."
+
+// mailTool builds the thunderbird_mail tool. The enabled actions depend on
+// the runtime mode, and the annotations follow from them.
+func mailTool(readOnly, allowSend bool) *mcp.Tool {
+	mailActions := []any{"list_accounts", "list_folders", "search_messages", "get_message", "list_recent", "get_attachment"}
+	if !readOnly {
+		mailActions = append(mailActions, "set_flags", "move_message", "delete_message")
+	}
+	if allowSend && !readOnly {
+		mailActions = append(mailActions, "send_mail", "reply_message", "forward_message", "save_draft")
+	}
+	// The tool has both read-only and destructive actions, so it is annotated
+	// as destructive whenever any destructive action is enabled.
+	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true}
+	if !readOnly {
+		destructive := true
+		annotations = &mcp.ToolAnnotations{DestructiveHint: &destructive, ReadOnlyHint: false}
+	}
+	return &mcp.Tool{
+		Name:        "thunderbird_mail",
+		Description: mailActionHelp,
+		InputSchema: mustSchema[MailInput](mailActions),
+		Annotations: annotations,
+	}
+}
+
 func main() {
 	// All the work lives in run so that a failure returns instead of calling
 	// os.Exit. log.Fatalf here skips every deferred function, and one of those
@@ -85,38 +121,8 @@ func run() error {
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "thunderbird", Version: version}, nil)
 
-	mailActions := []any{"list_accounts", "list_folders", "search_messages", "get_message", "list_recent", "get_attachment"}
-	if !app.ReadOnly {
-		mailActions = append(mailActions, "set_flags", "move_message", "delete_message")
-	}
-	if app.AllowSend && !app.ReadOnly {
-		mailActions = append(mailActions, "send_mail", "reply_message", "forward_message", "save_draft")
-	}
-
 	if allowed("thunderbird_mail") {
-		// Mail tool has both read-only and destructive actions;
-		// annotations depend on which actions are enabled (not known until runtime).
-		// We annotate it with DestructiveHint when any destructive action is enabled.
-		var mailAnnotations *mcp.ToolAnnotations
-		if !app.ReadOnly {
-			// Tool can be destructive (set_flags, move_message, delete_message, send_mail, etc.)
-			destructive := true
-			mailAnnotations = &mcp.ToolAnnotations{
-				DestructiveHint: &destructive,
-				ReadOnlyHint:    false,
-			}
-		} else {
-			// Tool is read-only
-			mailAnnotations = &mcp.ToolAnnotations{
-				ReadOnlyHint: true,
-			}
-		}
-		mcp.AddTool(server, &mcp.Tool{
-			Name:        "thunderbird_mail",
-			Description: "Thunderbird mail operations. Set `action` to one of the enum values. Read actions (list_accounts, list_folders, search_messages, get_message, list_recent, get_attachment) are always available; set_flags/move_message/delete_message require write access; send_mail/reply_message/forward_message/save_draft require THUNDERBIRD_ALLOW_SEND=true.",
-			InputSchema: mustSchema[MailInput](mailActions),
-			Annotations: mailAnnotations,
-		}, ThunderbirdMail)
+		mcp.AddTool(server, mailTool(app.ReadOnly, app.AllowSend), ThunderbirdMail)
 	}
 
 	if allowed("thunderbird_contacts") {
