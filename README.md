@@ -90,6 +90,31 @@ docker run -i --rm --network host \
 
 `--network host` lets the container reach your IMAP/SMTP servers; mounting the profile read-only is recommended (the server never writes to it).
 
+### Over HTTP
+
+The server speaks stdio unless `THUNDERBIRD_HTTP_ADDR` is set. Then it serves MCP over Streamable HTTP at `/mcp` and requires a bearer token (at least 16 characters, from a file so it stays out of process listings):
+
+```bash
+openssl rand -hex 32 > ~/.config/thunderbird-mcp-token && chmod 600 ~/.config/thunderbird-mcp-token
+
+docker run -d --name thunderbird-mcp --network host \
+  -e THUNDERBIRD_PROFILE=/profile \
+  -e THUNDERBIRD_HTTP_ADDR=127.0.0.1:8080 \
+  -e THUNDERBIRD_HTTP_TOKEN_FILE=/run/token \
+  -v "$HOME/.thunderbird/xxxx.default-release:/profile:ro" \
+  -v "$HOME/.config/thunderbird-mcp-token:/run/token:ro" \
+  ghcr.io/mudler/thunderbird-mcp:latest
+```
+
+Point a client at it with the token in an `Authorization` header. For Claude Code:
+
+```bash
+claude mcp add --transport http thunderbird http://127.0.0.1:8080/mcp \
+  --header "Authorization: Bearer $(cat ~/.config/thunderbird-mcp-token)"
+```
+
+Any client that supports Streamable HTTP and custom headers works the same way. Plain HTTP sends the token in clear text, so keep it on loopback or add TLS; see [serving over HTTP](docs/configuration.md#serving-over-http).
+
 ### From source
 
 ```bash

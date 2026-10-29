@@ -4,7 +4,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes 
 
 It reads Thunderbird's own on-disk state directly (`prefs.js`, the gloda search index, the NSS credential store, the address book and calendar databases) and uses IMAP/SMTP for anything live. No Thunderbird extension is required, and it works whether or not Thunderbird is running.
 
-- **[Configuration](configuration.md)** — environment variables and profile discovery
+- **[Configuration](configuration.md)** — environment variables, profile discovery and [serving over HTTP](configuration.md#serving-over-http)
 - **[Tools](tools.md)** — the three tools and every action's parameters
 - **[Security](security.md)** — the read-only guarantees and the send/write gating
 
