@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -111,7 +112,9 @@ func (g *Gloda) queryRows(query string, args ...any) ([]MessageSummary, error) {
 	defer rows.Close()
 	var out []MessageSummary
 	for rows.Next() {
-		var folderURI, subject, author, body string
+		var folderURI string
+		// The FTS content table allows NULL in every text column.
+		var subject, author, body sql.NullString
 		var key uint32
 		var micros int64
 		if err := rows.Scan(&folderURI, &key, &micros, &subject, &author, &body); err != nil {
@@ -119,8 +122,8 @@ func (g *Gloda) queryRows(query string, args ...any) ([]MessageSummary, error) {
 		}
 		out = append(out, MessageSummary{
 			Ref:     MessageRef{FolderURI: folderURI, MessageKey: key}.String(),
-			Subject: subject, Author: author,
-			Snippet: snippet(body, 200),
+			Subject: subject.String, Author: author.String,
+			Snippet: snippet(body.String, 200),
 			Date:    time.UnixMicro(micros).UTC(),
 		})
 	}
