@@ -20,6 +20,11 @@ relevant to the chosen action are used.
 | `forward_message` | `message_ref`, `from?`, `to`, `body?` |
 | `save_draft` | `from`, `to?`, `subject?`, `body?` |
 
+To list messages, use `list_recent` (the newest indexed messages, optionally of
+one account or folder) or `search_messages` with filters. There is no
+`list_messages` action; a client that sends it gets a schema validation error that
+lists the valid actions.
+
 `search_messages` returns a `message_ref` for each hit; pass it to `get_message`
 and the mutation actions. `set_flags`/`move_message`/`delete_message` operate on
 IMAP accounts only (local folders are read-only). `send_*`/`save_draft` require
