@@ -31,6 +31,14 @@ The four compose actions are absent from the tool schema unless
 client bypasses the schema. `THUNDERBIRD_READ_ONLY=true` removes all mutating and
 sending actions at once.
 
+## HTTP transport
+
+The HTTP transport is off unless `THUNDERBIRD_HTTP_ADDR` is set, and it never runs
+without a bearer token. The token is compared in constant time. The SDK's DNS
+rebinding protection stays on. The server does not log the token. See
+[serving over HTTP](configuration.md#serving-over-http) for the setup, including
+what plain HTTP exposes.
+
 ## Credentials
 
 Passwords are decrypted only in memory and are never logged or returned by any

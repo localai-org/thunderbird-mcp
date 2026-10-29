@@ -64,6 +64,10 @@ More detail in [docs/security.md](docs/security.md).
 | `THUNDERBIRD_READ_ONLY` | `false` | when `true`, mutating and sending actions are unavailable |
 | `THUNDERBIRD_ALLOW_SEND` | `false` | when `true`, the compose/send actions are enabled |
 | `THUNDERBIRD_TOOLS` | all | comma-separated allowlist of the three tool names |
+| `THUNDERBIRD_HTTP_ADDR` | unset (stdio) | `host:port` to serve MCP over HTTP instead of stdio. Requires a token; see [docs/configuration.md](docs/configuration.md#serving-over-http). |
+| `THUNDERBIRD_HTTP_TOKEN` | unset | Bearer token for HTTP clients, at least 16 characters. |
+| `THUNDERBIRD_HTTP_TOKEN_FILE` | unset | File holding the token. Use it instead of `THUNDERBIRD_HTTP_TOKEN`, not with it. |
+| `THUNDERBIRD_HTTP_TLS_CERT`, `THUNDERBIRD_HTTP_TLS_KEY` | unset | PEM files to serve HTTPS. Set both or neither. |
 
 ## Quick start
 
