@@ -54,7 +54,7 @@ const mailActionHelp = "Thunderbird mail operations. Set `action` to one of the 
 	"Read actions: list_accounts (accounts and their keys); list_folders (folders, optionally of one account); " +
 	"search_messages (filter by query, sender, recipient, subject, dates, account or folder); " +
 	"list_recent (newest indexed messages, optionally of one account or folder; this is how to list messages, there is no list_messages); " +
-	"get_message (full message by message_ref); get_attachment (one attachment by message_ref and index). " +
+	"get_message (full message by message_ref); get_attachment (one attachment by message_ref and index from the get_message attachments list; saves the file to disk and returns its path, and returns text attachments inline; set save=false to skip saving). " +
 	"set_flags/move_message/delete_message change messages and are unavailable in read-only mode. " +
 	"send_mail/reply_message/forward_message/save_draft require THUNDERBIRD_ALLOW_SEND=true."
 
@@ -153,6 +153,7 @@ func run() error {
 	// Run returns when the transport closes or ctx is cancelled by a signal;
 	// either way the deferred cleanup below runs.
 	if httpCfg != nil {
+		servingHTTP = true
 		return serveHTTP(ctx, httpCfg, server)
 	}
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) {

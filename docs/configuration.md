@@ -12,6 +12,12 @@
 | `THUNDERBIRD_HTTP_TOKEN` | unset | Bearer token for HTTP clients, at least 16 characters. |
 | `THUNDERBIRD_HTTP_TOKEN_FILE` | unset | File holding the token. Use it instead of `THUNDERBIRD_HTTP_TOKEN`, not with it. |
 | `THUNDERBIRD_HTTP_TLS_CERT`, `THUNDERBIRD_HTTP_TLS_KEY` | unset | PEM files to serve HTTPS. Set both or neither. |
+| `THUNDERBIRD_MAX_ATTACHMENT_BYTES` | `26214400` (25 MiB) | Largest attachment `get_attachment` will read. |
+| `THUNDERBIRD_ATTACHMENT_DIR` | `thunderbird-mcp-attachments` in the user cache directory | Where `get_attachment` saves files. Setting it also turns saving on by default over HTTP. |
+| `THUNDERBIRD_ATTACHMENT_URL_TTL` | `10m` | HTTP only. How long an attachment download URL works. A Go duration. |
+| `THUNDERBIRD_PUBLIC_URL` | unset | HTTP only. Base URL for attachment download URLs, for example `https://mail.example.org`. Needed behind a reverse proxy. Without it the URL uses the request `Host` header, then the listen address. |
+
+See [attachments](tools.md#attachments) for how these are used.
 
 ## Serving over HTTP
 

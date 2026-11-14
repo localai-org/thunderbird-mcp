@@ -89,6 +89,7 @@ func bearerVerifier(token string) auth.TokenVerifier {
 func newHTTPHandler(server *mcp.Server, token string) http.Handler {
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /attachments/{index}/{name}", serveAttachmentDownload)
 	mux.Handle("/mcp", auth.RequireBearerToken(bearerVerifier(token), nil)(mcpHandler))
 	return mux
 }
@@ -103,6 +104,9 @@ func serveHTTP(ctx context.Context, cfg *httpConfig, server *mcp.Server) error {
 }
 
 func serveHTTPOn(ctx context.Context, ln net.Listener, cfg *httpConfig, server *mcp.Server) error {
+	setAttachmentURLKey(cfg.Token)
+	attachmentListenAddr = ln.Addr().String()
+	attachmentTLS = cfg.CertFile != ""
 	srv := &http.Server{
 		Handler:           newHTTPHandler(server, cfg.Token),
 		ReadHeaderTimeout: 10 * time.Second,

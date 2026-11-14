@@ -52,7 +52,7 @@ func ParseMessage(ref string, raw []byte) (MessageDetail, error) {
 			ct, _, _ := ph.ContentType()
 			body, _ := io.ReadAll(p.Body)
 			d.Attachments = append(d.Attachments, Attachment{
-				Filename: fn, ContentType: ct, Size: len(body),
+				Index: len(d.Attachments), Filename: fn, ContentType: ct, Size: len(body),
 			})
 		}
 	}

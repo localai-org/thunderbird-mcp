@@ -71,3 +71,26 @@ The public desktop client identity does not keep refresh tokens confidential.
 No tool returns grants, and the server never writes them to Thunderbird’s files.
 See [cache and restart limitations](configuration.md#cache-and-restart-limitations) before relying on long-running grant reuse.
 OAuth support does not bypass the read-only, sending, identity, or recipient controls.
+
+## Attachments
+
+- `get_attachment` writes files outside the Thunderbird profile, to
+  `THUNDERBIRD_ATTACHMENT_DIR`. The directories are created with mode `0700` and
+  the files with `0600`. Files stay there until you delete them.
+- The attachment filename comes from the sender, so it is untrusted. Only its
+  last path element is used, control characters and separators are replaced,
+  leading dots are removed, and the length is capped. Files are created with
+  `O_EXCL`, so an existing file or symlink is never overwritten or followed. The
+  per-message directory name is a hash of the message reference.
+- Size is limited by `THUNDERBIRD_MAX_ATTACHMENT_BYTES`. A saved file is mail
+  content from an unknown sender: do not open or run it without checking it.
+- Over HTTP, `GET /attachments/<index>/<name>?ref=&exp=&sig=` serves one file.
+  `sig` is an HMAC-SHA256 over the message reference, the index and the expiry,
+  compared in constant time. The key is derived from the bearer token, so it
+  changes when the token changes and the URL never contains the token. The route
+  ignores `Authorization` and rejects any request without a valid `sig`.
+  Responses use `Content-Disposition: attachment`, `nosniff` and `no-store`.
+- The URL is a capability: anyone who holds it can read that one attachment until
+  it expires (10 minutes by default). Web servers and proxies may log the query
+  string. Use HTTPS, keep `THUNDERBIRD_ATTACHMENT_URL_TTL` short, and do not paste
+  the URL in places that keep it.

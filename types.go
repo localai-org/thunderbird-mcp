@@ -55,8 +55,10 @@ type MessageDetail struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
-// Attachment describes one message attachment (metadata only).
+// Attachment describes one message attachment (metadata only). Index is the
+// value to pass to get_attachment.
 type Attachment struct {
+	Index       int    `json:"index"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int    `json:"size"`
@@ -309,6 +311,7 @@ type ListEventsOutput struct {
 type GetAttachmentInput struct {
 	MessageRef string `json:"message_ref" jsonschema:"reference returned by search_messages or list_recent"`
 	Index      int    `json:"index" jsonschema:"zero-based attachment index from get_message metadata"`
+	Save       *bool  `json:"save,omitempty" jsonschema:"write the file to disk and return its path; default true (default false over HTTP unless THUNDERBIRD_ATTACHMENT_DIR is set)"`
 }
 type GetAttachmentOutput struct {
 	Attachment AttachmentData `json:"attachment"`
@@ -335,7 +338,8 @@ type MailInput struct {
 	Offset      int      `json:"offset,omitempty"`
 	MessageRef  string   `json:"message_ref,omitempty" jsonschema:"get_message/set_flags/move_message/delete_message/reply_message/forward_message/get_attachment: reference from search_messages"`
 	BodyFormat  string   `json:"body_format,omitempty" jsonschema:"get_message: text (default) or html"`
-	Index       int      `json:"index,omitempty" jsonschema:"get_attachment: zero-based attachment index"`
+	Index       int      `json:"index,omitempty" jsonschema:"get_attachment: zero-based attachment index from the get_message attachments list"`
+	Save        *bool    `json:"save,omitempty" jsonschema:"get_attachment: save the file to disk and return its path (default true; over HTTP default false unless THUNDERBIRD_ATTACHMENT_DIR is set); text attachments are also returned inline, truncated"`
 	Read        *bool    `json:"read,omitempty" jsonschema:"set_flags: mark read (true) or unread (false)"`
 	Flagged     *bool    `json:"flagged,omitempty" jsonschema:"set_flags: set or clear the star"`
 	AddTags     []string `json:"add_tags,omitempty" jsonschema:"set_flags: tags to add"`

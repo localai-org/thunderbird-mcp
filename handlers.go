@@ -47,7 +47,7 @@ func ThunderbirdMail(ctx context.Context, req *mcp.CallToolRequest, in MailInput
 		_, o, err := ListRecent(ctx, req, ListRecentInput{Account: in.Account, Folder: in.Folder, Limit: in.Limit})
 		return nil, MailOutput{Messages: o.Messages, Count: o.Count}, err
 	case "get_attachment":
-		result, err := GetAttachment(ctx, req, GetAttachmentInput{MessageRef: in.MessageRef, Index: in.Index})
+		result, err := GetAttachment(ctx, req, GetAttachmentInput{MessageRef: in.MessageRef, Index: in.Index, Save: in.Save})
 		if err != nil {
 			return nil, MailOutput{}, err
 		}
@@ -264,64 +264,108 @@ func getAttachmentSizeLimit() int {
 	return defaultAttachmentSizeLimit
 }
 
-func GetAttachment(_ context.Context, _ *mcp.CallToolRequest, in GetAttachmentInput) (*mcp.CallToolResult, error) {
+func GetAttachment(_ context.Context, req *mcp.CallToolRequest, in GetAttachmentInput) (*mcp.CallToolResult, error) {
 	// Validate index first, before any app access
 	if in.Index < 0 {
 		return nil, fmt.Errorf("attachment index must be >= 0, got %d", in.Index)
 	}
-
-	limitBytes := getAttachmentSizeLimit()
-
-	ref, err := ParseMessageRef(in.MessageRef)
+	fn, ct, data, err := loadAttachment(in.MessageRef, in.Index)
 	if err != nil {
 		return nil, err
+	}
+	return buildAttachmentResult(in, requestHost(req), fn, ct, data)
+}
+
+// requestHost returns the Host header of the HTTP request behind a tool call,
+// or "" for stdio.
+func requestHost(req *mcp.CallToolRequest) string {
+	if req == nil || req.Extra == nil || req.Extra.Header == nil {
+		return ""
+	}
+	return req.Extra.Header.Get("Host")
+}
+
+// loadAttachment reads the message and extracts one attachment, within the
+// size limit.
+func loadAttachment(messageRef string, index int) (fn, ct string, data []byte, err error) {
+	limitBytes := getAttachmentSizeLimit()
+	ref, err := ParseMessageRef(messageRef)
+	if err != nil {
+		return "", "", nil, err
 	}
 	var raw []byte
 	if app.folderIsLocal(ref.FolderURI) {
 		a, err := app.localAccountFor(ref.FolderURI)
 		if err != nil {
-			return nil, err
+			return "", "", nil, err
 		}
 		mboxPath := localMboxPath(a, ref.FolderURI)
 		if mboxPath == "" {
-			return nil, fmt.Errorf("cannot resolve a safe local folder path for %q", ref.FolderURI)
+			return "", "", nil, fmt.Errorf("cannot resolve a safe local folder path for %q", ref.FolderURI)
 		}
 		raw, err = readMboxAt(mboxPath, ref.MessageKey)
 		if err != nil {
-			return nil, fmt.Errorf("reading local message: %w", err)
+			return "", "", nil, fmt.Errorf("reading local message: %w", err)
 		}
 	} else {
 		raw, err = app.IMAP.FetchBody(ref)
 		if err != nil {
-			return nil, err
+			return "", "", nil, err
 		}
 	}
-	fn, ct, data, err := ExtractAttachment(raw, in.Index, limitBytes)
-	if err != nil {
-		return nil, err
+	return ExtractAttachment(raw, index, limitBytes)
+}
+
+// buildAttachmentResult saves the attachment when asked and describes it.
+// The text result carries the saved path and, for text-like content, the
+// decoded text, so a client that drops embedded resources can still use it.
+func buildAttachmentResult(in GetAttachmentInput, host, fn, ct string, data []byte) (*mcp.CallToolResult, error) {
+	displayName := SanitizeFilename(fn)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Attachment %d: %s\nContent-Type: %s\nSize: %d bytes\n", in.Index, displayName, ct, len(data))
+
+	saved := false
+	if shouldSave(in.Save) {
+		dir, _, err := attachmentDir()
+		if err != nil {
+			return nil, err
+		}
+		path, err := saveAttachment(dir, in.MessageRef, in.Index, fn, data)
+		if err != nil {
+			return nil, err
+		}
+		saved = true
+		fmt.Fprintf(&b, "Saved to: %s\n", path)
+	} else {
+		b.WriteString("Not saved to disk.\n")
 	}
 
-	// Sanitize filename for display
-	displayName := SanitizeFilename(fn)
+	if link := attachmentDownloadURL(host, in.MessageRef, in.Index, displayName); link != "" {
+		fmt.Fprintf(&b, "Download URL (valid %s, single file, needs no other credentials): %s\n", attachmentURLTTL(), link)
+	}
 
-	// Create URI for the attachment resource
-	uri := fmt.Sprintf("attachment://%s/%d", url.PathEscape(in.MessageRef), in.Index)
+	if isTextContentType(ct) {
+		text, truncated := inlineText(data, maxInlineTextBytes)
+		b.WriteString("\n--- content ---\n")
+		b.WriteString(text)
+		if truncated {
+			fmt.Fprintf(&b, "\n--- truncated: showing the first %d of %d bytes", maxInlineTextBytes, len(data))
+			if saved {
+				b.WriteString("; read the saved file for the rest")
+			}
+			b.WriteString(" ---")
+		}
+		b.WriteString("\n")
+	}
 
-	// Return MCP CallToolResult with EmbeddedResource
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.EmbeddedResource{
-				Resource: &mcp.ResourceContents{
-					URI:      uri,
-					MIMEType: ct,
-					Blob:     data, // raw bytes; SDK will base64-encode
-				},
-			},
-			&mcp.TextContent{
-				Text: fmt.Sprintf("Attachment: %s (%d bytes)", displayName, len(data)),
-			},
-		},
-	}, nil
+	content := []mcp.Content{&mcp.TextContent{Text: b.String()}}
+	if !saved || len(data) <= maxEmbedBytes {
+		uri := fmt.Sprintf("attachment://%s/%d", url.PathEscape(in.MessageRef), in.Index)
+		content = append(content, &mcp.EmbeddedResource{
+			Resource: &mcp.ResourceContents{URI: uri, MIMEType: ct, Blob: data},
+		})
+	}
+	return &mcp.CallToolResult{Content: content}, nil
 }
 
 func ListFolders(_ context.Context, _ *mcp.CallToolRequest, in ListFoldersInput) (*mcp.CallToolResult, ListFoldersOutput, error) {
